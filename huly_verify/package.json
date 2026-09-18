@@ -1,0 +1,15 @@
+{
+  "name": "huly-verify",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "verify": "tsx verify.ts"
+  },
+  "dependencies": {
+    "@hcengineering/api-client": "latest",
+    "@hcengineering/core": "latest",
+    "@hcengineering/tracker": "latest",
+    "tsx": "latest"
+  }
+}

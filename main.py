@@ -6,7 +6,6 @@ import asyncio
 import datetime as dt
 import json
 import os
-import re
 import tempfile
 from typing import Any
 
@@ -17,7 +16,7 @@ from astrbot.api.event import AstrMessageEvent, MessageChain, filter
 from astrbot.api.star import Context, Star
 
 if __package__:
-    from .data_scope import Scope, ZenTaoClient, ZenTaoClientConfig
+    from .data_scope import BridgeClientConfig, HulyClient, Scope
     from .report_html import STYLES
     from .report_logic import (
         build_report,
@@ -27,7 +26,7 @@ if __package__:
     )
     from .report_renderer import render_report_png
 else:
-    from data_scope import Scope, ZenTaoClient, ZenTaoClientConfig
+    from data_scope import BridgeClientConfig, HulyClient, Scope
     from report_html import STYLES
     from report_logic import (
         build_report,
@@ -39,38 +38,38 @@ else:
 
 
 class ZenTaoReport(Star):
-    """禅道每日缺陷日报：只读生成手机比例图片，可配置主动推送到企业微信。"""
+    """Huly 每日缺陷日报：只读生成手机比例图片，可配置主动推送到企业微信。"""
 
     def __init__(self, context: Context, config: AstrBotConfig) -> None:
         super().__init__(context)
         self.config = config
 
-    def _client(self) -> ZenTaoClient:
-        """Build a ZenTao client from the plugin configuration.
+    def _client(self) -> HulyClient:
+        """Build a Huly bridge client from the plugin configuration.
 
         Returns:
-            An unauthenticated ZenTao client.
+            A client for the Huly bridge sidecar.
         """
-        return ZenTaoClient(
-            ZenTaoClientConfig(
-                base_url=str(self.config.get("zentao_base_url", "")).strip(),
-                account=str(self.config.get("zentao_account", "")).strip(),
-                password=str(self.config.get("zentao_password", "")),
-                token=str(self.config.get("zentao_token", "")).strip(),
+        return HulyClient(
+            BridgeClientConfig(
+                base_url=str(self.config.get("huly_bridge_url", "")).strip(),
+                token=str(self.config.get("huly_bridge_token", "")).strip(),
             )
         )
 
-    def _auth_summary(self, client: ZenTaoClient) -> str:
-        """Summarize authentication readiness without exposing secrets.
+    def _auth_summary(self, client: HulyClient) -> str:
+        """Summarize bridge readiness without exposing secrets.
 
         Args:
-            client: ZenTao client.
+            client: Huly bridge client.
 
         Returns:
             A redacted authentication state string.
         """
+        if not client.auth_configured():
+            return "未配置 Bridge 地址"
         mode = client.health()["auth"]
-        return {"token": "API Token 已配置", "account": "账号密码已配置", "none": "未配置凭据"}[mode]
+        return {"token": "Bridge Token 已配置", "none": "Bridge 无鉴权（直连）"}[mode]
 
     def _style(self, requested: str = "") -> str:
         """Resolve the report style from a request or plugin config.
@@ -84,30 +83,29 @@ class ZenTaoReport(Star):
         chosen = (requested.strip().lower() or str(self.config.get("report_style", "graphite")).strip().lower() or "graphite")
         return chosen if chosen in STYLES else "graphite"
 
-    async def _collect(self) -> tuple[list[Scope], dict[int, list[dict[str, Any]]]]:
+    async def _collect(self) -> tuple[list[Scope], dict[str, list[dict[str, Any]]]]:
         """Authenticate and collect scopes and their bugs.
 
         Returns:
             A tuple of scopes and bugs grouped by scope ID.
         """
-        product_ids = parse_ids(str(self.config.get("scope_product_ids", "")))
         project_ids = parse_ids(str(self.config.get("scope_project_ids", "")))
 
         client = self._client()
         async with client:
             await client.authenticate()
-            scopes = await client.list_scopes(product_ids, project_ids)
-            bugs_by_scope: dict[int, list[dict[str, Any]]] = {}
+            scopes = await client.list_scopes(set(), project_ids)
+            bugs_by_scope: dict[str, list[dict[str, Any]]] = {}
             for scope in scopes:
                 bugs = await client.list_bugs(scope)
                 bugs_by_scope[scope.id] = await client.enrich_module_names(bugs)
         return scopes, bugs_by_scope
 
-    async def _collect_project(self, query: str) -> tuple[list[Scope], dict[int, list[dict[str, Any]]], dict[str, str]]:
-        """Load exactly one project by its ZenTao ID or display name.
+    async def _collect_project(self, query: str) -> tuple[list[Scope], dict[str, list[dict[str, Any]]], dict[str, str]]:
+        """Load exactly one project by its identifier or display name.
 
         Args:
-            query: Project ID or project name supplied by the user.
+            query: Project identifier (e.g. ``5092``) or project name.
 
         Returns:
             The matched project and its bugs.
@@ -117,22 +115,24 @@ class ZenTaoReport(Star):
         """
         query = query.strip()
         if not query:
-            raise RuntimeError("请提供项目 ID 或项目名称，例如 /BR 509")
+            raise RuntimeError("请提供项目标识或项目名称，例如 /BR 5092")
         client = self._client()
         async with client:
             await client.authenticate()
             projects = await client.list_scopes(set(), set())
+            # Exact identifier wins; otherwise try exact then prefix name match.
             exact_id = [scope for scope in projects if query == str(scope.id)]
-            exact_name = [scope for scope in projects if query == scope.name.removeprefix("项目 · ").removeprefix("产品 · ")]
-            numeric_matches = [scope for scope in projects if re.search(rf"(?<!\d){re.escape(query)}(?!\d)", scope.name.removeprefix("项目 · ").removeprefix("产品 · "))]
-            candidates = exact_id or list(dict.fromkeys(exact_name + numeric_matches))
-            if len(candidates) > 1 or (exact_name and numeric_matches and exact_name[0] not in numeric_matches):
-                candidates = list(dict.fromkeys(exact_name + numeric_matches))
+            display = lambda s: s.name.removeprefix("项目 · ")
+            exact_name = [scope for scope in projects if query == display(scope)]
+            prefix_matches = [scope for scope in projects if display(scope).startswith(query) or str(scope.id).startswith(query)]
+            candidates = exact_id or list(dict.fromkeys(exact_name + prefix_matches))
+            if len(candidates) > 1 or (exact_name and prefix_matches and exact_name[0] not in prefix_matches):
+                candidates = list(dict.fromkeys(exact_name + prefix_matches))
                 bug_lists = await asyncio.gather(*(client.list_bugs(scope) for scope in candidates))
                 candidates = [scope for scope, bugs in zip(candidates, bug_lists) if bugs] or candidates
             if len(candidates) != 1:
                 labels = ", ".join(f"{scope.id}:{scope.name}" for scope in candidates)
-                raise RuntimeError(f"编号「{query}」匹配多个项目或产品：{labels}")
+                raise RuntimeError(f"标识「{query}」匹配多个项目：{labels or '无'}")
             matched = candidates
             bugs, users = await asyncio.gather(client.list_bugs(matched[0]), client.list_users())
             return matched, {matched[0].id: await client.enrich_module_names(bugs)}, users
@@ -171,7 +171,7 @@ class ZenTaoReport(Star):
 
         return await asyncio.to_thread(self._render_path, report, style)
 
-    async def _build_report_context(self) -> tuple[list[Scope], dict[int, list[dict[str, Any]]], dict[str, Any]]:
+    async def _build_report_context(self) -> tuple[list[Scope], dict[str, list[dict[str, Any]]], dict[str, Any]]:
         """Collect scopes and bugs and aggregate a report context.
 
         Returns:
@@ -182,7 +182,7 @@ class ZenTaoReport(Star):
         report = build_report(
             scopes,
             bugs_by_scope,
-            str(self.config.get("report_title", "禅道每日缺陷日报")).strip() or "禅道每日缺陷日报",
+            str(self.config.get("report_title", "Huly 每日缺陷日报")).strip() or "Huly 每日缺陷日报",
             generated_at,
         )
         return scopes, bugs_by_scope, report
@@ -209,12 +209,12 @@ class ZenTaoReport(Star):
         report = build_report(
             scopes,
             bugs_by_scope,
-            str(self.config.get("report_title", "禅道每日缺陷日报")).strip() or "禅道每日缺陷日报",
+            str(self.config.get("report_title", "Huly 每日缺陷日报")).strip() or "Huly 每日缺陷日报",
             dt.datetime.now().strftime("%Y-%m-%d %H:%M"),
             int(self.config.get("top_bug_limit", 5) or 5),
         )
-        report["project_name"] = scopes[0].name.removeprefix("项目 · ").removeprefix("产品 · ")
-        report["system_name"] = str(self.config.get("system_name", "禅道")).strip() or "禅道"
+        report["project_name"] = scopes[0].name.removeprefix("项目 · ")
+        report["system_name"] = str(self.config.get("system_name", "Huly")).strip() or "Huly"
         report["project_avatar_url"] = self._project_avatar(report["project_name"])
         return report
 
@@ -238,7 +238,7 @@ class ZenTaoReport(Star):
             "modules": report["modules"][:8], "top_bugs": report["top_bugs"][:5],
         }
         prompt = (
-            "你是研发项目经理。请根据下面的禅道项目日报上下文，生成一段中文状况点评，"
+            "你是研发项目经理。请根据下面的项目日报上下文，生成一段中文状况点评，"
             "长度60至120字，分成2至3句。只能使用上下文事实，不得编造人员、状态、数量或完成情况。"
             "评价今日新增与解决情况，指出积压重点和高风险缺陷；若上下文包含今日解决人及数量可以点名表扬，"
             "没有就不要猜测。不要输出标题、Markdown、免责声明或套话。\n\n"
@@ -253,7 +253,7 @@ class ZenTaoReport(Star):
             if comment:
                 return comment[:240]
         except Exception:  # noqa: BLE001
-            logger.warning("AstrBot provider unavailable for ZenTao daily comment")
+            logger.warning("AstrBot provider unavailable for daily comment")
 
         api_key = str(self.config.get("ai_fallback_api_key", "")).strip()
         base_url = str(self.config.get("ai_fallback_base_url", "https://api.openai.com/v1")).strip().rstrip("/")
@@ -272,7 +272,7 @@ class ZenTaoReport(Star):
                 comment = str(payload["choices"][0]["message"]["content"]).strip().replace("\n", " ")
                 return comment[:240] if comment else "AI点评暂不可用"
         except (httpx.HTTPError, KeyError, IndexError, TypeError, ValueError):
-            logger.warning("Fallback API unavailable for ZenTao daily comment")
+            logger.warning("Fallback API unavailable for daily comment")
             return "AI点评暂不可用"
 
     def _project_avatar(self, project_name: str) -> str:
@@ -313,7 +313,7 @@ class ZenTaoReport(Star):
             raise RuntimeError("推送开关未开启")
 
         path = await self._to_thread_render(report, style)
-        chain = MessageChain().message(f"禅道日报 {report['generated_at']}").file_image(path)
+        chain = MessageChain().message(f"Huly 日报 {report['generated_at']}").file_image(path)
         return await self.context.send_message(session, chain)
 
     @filter.command_group("bug_report")
@@ -322,26 +322,24 @@ class ZenTaoReport(Star):
 
     @bug_report.command("health")
     async def health(self, event: AstrMessageEvent) -> None:
-        """检查 ZenTao 凭据配置状态（不回显敏感信息）。"""
+        """检查 Huly Bridge 配置状态（不回显敏感信息）。"""
         client = self._client()
         push = "已开启" if self.config.get("push_enabled") else "关闭"
         yield event.plain_result(
-            f"禅道日报健康检查\n"
+            f"Huly 日报健康检查\n"
             f"凭据：{self._auth_summary(client)}\n"
-            f"ZenTao 地址：{'已配置' if self.config.get('zentao_base_url') else '未配置'}\n"
+            f"Bridge 地址：{'已配置' if self.config.get('huly_bridge_url') else '未配置'}\n"
             f"企业微信推送：{push}"
         )
 
     @bug_report.command("status")
     async def status(self, event: AstrMessageEvent) -> None:
         """查看插件配置与推送开关状态。"""
-        product_ids = parse_ids(str(self.config.get("scope_product_ids", "")))
         project_ids = parse_ids(str(self.config.get("scope_project_ids", "")))
         yield event.plain_result(
-            f"禅道日报状态\n"
-            f"标题：{self.config.get('report_title', '禅道每日缺陷日报')}\n"
+            f"Huly 日报状态\n"
+            f"标题：{self.config.get('report_title', 'Huly 每日缺陷日报')}\n"
             f"项目范围：{sorted(project_ids) or '全部'}\n"
-            f"产品范围：{sorted(product_ids) or '全部'}\n"
             f"风格：{self._style()}\n"
             f"推送：{'开启' if self.config.get('push_enabled') else '关闭'}"
         )
@@ -353,7 +351,7 @@ class ZenTaoReport(Star):
 
     @bug_report.command("preview")
     async def preview(self, event: AstrMessageEvent, style: str = "") -> None:
-        """生成今日禅道缺陷日报图片并预览。
+        """生成今日缺陷日报图片并预览。
 
         Args:
             style: 可选，指定渲染风格；留空使用配置中的默认风格。
@@ -365,8 +363,8 @@ class ZenTaoReport(Star):
             yield event.plain_result(f"风格：{chosen}")
             yield event.image_result(path)
         except Exception as exc:  # noqa: BLE001
-            logger.exception("ZenTao report preview failed")
-            yield event.plain_result(f"禅道日报预览失败：{exc}")
+            logger.exception("Report preview failed")
+            yield event.plain_result(f"日报预览失败：{exc}")
 
     async def _project_report(self, event: AstrMessageEvent, project: str = "") -> None:
         """Generate a read-only report for one project, for example ``/BR 509``.
@@ -385,7 +383,7 @@ class ZenTaoReport(Star):
             yield event.plain_result(f"{report['project_name']}缺陷日报已生成")
             yield event.image_result(path)
         except Exception as exc:  # noqa: BLE001
-            logger.exception("ZenTao project report preview failed")
+            logger.exception("Project report preview failed")
             yield event.plain_result(f"项目日报生成失败：{exc}")
             event.stop_event()
 
@@ -408,8 +406,8 @@ class ZenTaoReport(Star):
             _scopes, _bugs, report = await self._build_report_context()
             yield event.plain_result(build_rule_summary(report))
         except Exception as exc:  # noqa: BLE001
-            logger.exception("ZenTao summary failed")
-            yield event.plain_result(f"禅道总结生成失败：{exc}")
+            logger.exception("Summary failed")
+            yield event.plain_result(f"总结生成失败：{exc}")
 
     @bug_report.command("review")
     async def review(self, event: AstrMessageEvent, scope: str = "", module: str = "") -> None:
@@ -435,7 +433,7 @@ class ZenTaoReport(Star):
                 lines.append("…以及更多（截断），请缩小模块范围。")
             yield event.plain_result("\n".join(lines))
         except Exception as exc:  # noqa: BLE001
-            logger.exception("ZenTao review lookup failed")
+            logger.exception("Review lookup failed")
             yield event.plain_result(f"待复核查询失败：{exc}")
 
     @bug_report.command("send")
@@ -446,7 +444,7 @@ class ZenTaoReport(Star):
             await self._send_report(report, self._style(style))
             yield event.plain_result("日报已推送。")
         except Exception as exc:  # noqa: BLE001
-            logger.exception("ZenTao send failed")
+            logger.exception("Send failed")
             yield event.plain_result(f"推送失败：{exc}")
 
     @bug_report.command("test")
@@ -459,10 +457,10 @@ class ZenTaoReport(Star):
         if kind.strip().lower() == "image":
             import astrbot.api.message_components as Comp
 
-            chain = [Comp.Plain("禅道日报图片测试："), Comp.Image.fromFileSystem("data/plugins/astrbot_plugin_zentao_report/test.png")]
+            chain = [Comp.Plain("日报图片测试："), Comp.Image.fromFileSystem("data/plugins/astrbot_plugin_zentao_report/test.png")]
             yield event.chain_result(chain)
             return
-        yield event.plain_result("[测试] 禅道日报文字通道正常。")
+        yield event.plain_result("[测试] 日报文字通道正常。")
 
     async def terminate(self) -> None:
         """Release resources when the plugin is reloaded."""

@@ -8,17 +8,17 @@ from report_logic import Scope, build_report
 
 def test_project_report_uses_real_statuses_and_module_names() -> None:
     """Aggregate project bugs without reverting to product-wide counters."""
-    scope = Scope(128, "项目 · 509", "project")
+    scope = Scope("509", "项目 · 509", "project")
     report = build_report(
         [scope],
         {
-            128: [
+            "509": [
                 {"id": 11, "title": "active", "status": "active", "severity": "1", "pri": "1", "moduleTitle": "业务管理", "assignedTo": {"realname": "甲"}},
                 {"id": 12, "title": "resolved", "status": "resolved", "severity": "3", "pri": "2", "moduleTitle": "业务管理", "assignedTo": {"realname": "乙"}},
                 {"id": 13, "title": "closed", "status": "closed", "severity": "4", "pri": "3", "moduleTitle": "系统设置", "assignedTo": {"realname": "丙"}},
             ]
         },
-        "禅道每日缺陷日报",
+        "Huly 每日缺陷日报",
         "2026-08-27 18:00",
     )
 

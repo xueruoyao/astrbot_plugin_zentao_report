@@ -9,54 +9,54 @@ import httpx
 
 @dataclass(frozen=True)
 class Scope:
-    """A ZenTao product or project scope.
+    """A reportable project scope.
 
     Args:
-        id: ZenTao scope ID.
+        id: Project identifier (Huly project string identifier, e.g. ``5092``).
         name: Display name of the scope.
-        kind: Scope kind, either ``product`` or ``project``.
+        kind: Scope kind; kept for compatibility, always ``project``.
     """
 
-    id: int
+    id: str
     name: str
-    kind: str  # "product" 或 "project"
+    kind: str = "project"
 
 
 @dataclass(frozen=True)
-class ZenTaoClientConfig:
-    """Configuration used to access the ZenTao API.
+class BridgeClientConfig:
+    """Configuration used to reach the Huly bridge sidecar.
 
     Args:
-        base_url: ZenTao server URL without the API path.
-        account: Optional ZenTao account.
-        password: Optional ZenTao password.
-        token: Optional API token.
+        base_url: Bridge base URL, e.g. ``http://127.0.0.1:8600``.
+        token: Optional shared secret matching the bridge ``BRIDGE_TOKEN``.
     """
 
     base_url: str
-    account: str = ""
-    password: str = ""
     token: str = ""
 
 
-class ZenTaoClient:
-    """Minimal asynchronous client for the ZenTao v1 API."""
+class HulyClient:
+    """Asynchronous client for the Huly bridge sidecar.
 
-    def __init__(self, config: ZenTaoClientConfig) -> None:
-        """Create a ZenTao client.
+    The bridge normalizes Huly data into the same field shape the report
+    layer already consumes (``id/title/status/severity/pri/...``), so the
+    aggregation and rendering code is source-agnostic.
+    """
+
+    def __init__(self, config: BridgeClientConfig) -> None:
+        """Create a bridge client.
 
         Args:
             config: Client configuration.
         """
         self.config = config
-        self._token = config.token
         self._client = httpx.AsyncClient(
-            base_url=f"{config.base_url.rstrip('/')}/api.php/v1/",
-            headers=self._headers(),
+            base_url=config.base_url.rstrip("/"),
+            headers={"X-Bridge-Token": config.token} if config.token else {},
             timeout=30,
         )
 
-    async def __aenter__(self) -> "ZenTaoClient":
+    async def __aenter__(self) -> "HulyClient":
         """Open the underlying HTTP client.
 
         Returns:
@@ -74,213 +74,104 @@ class ZenTaoClient:
         await self._client.__aexit__(*exc)
 
     async def authenticate(self) -> None:
-        """Authenticate with account credentials when no token is configured.
+        """Verify bridge connectivity and auth readiness.
+
+        The bridge holds the Huly credentials; the plugin only needs the
+        bridge to be reachable and authorized.
 
         Raises:
-            RuntimeError: If credentials are missing or the response has no token.
+            RuntimeError: If the bridge is unreachable or reports a failure.
         """
-        if self._token:
-            return
-        if not self.config.account or not self.config.password:
-            raise RuntimeError("未配置 ZenTao API Token 且无账号密码")
-
-        response = await self._request(
-            "POST",
-            "tokens",
-            json={"account": self.config.account, "password": self.config.password},
-        )
-        token = response.json().get("token")
-        if not token:
-            raise RuntimeError("ZenTao Token 响应为空")
-        self._token = str(token)
-        self._client.headers.update(self._headers())
+        try:
+            response = await self._request("GET", "/health")
+            payload = response.json()
+            if not payload.get("ok"):
+                raise RuntimeError("Huly Bridge 未就绪")
+        except httpx.HTTPError as exc:
+            raise RuntimeError(f"无法连接 Huly Bridge：{exc}") from exc
 
     async def list_scopes(
-        self, product_ids: set[int], project_ids: set[int]
+        self, product_ids: set[str], project_ids: set[str]
     ) -> list[Scope]:
-        """List selected products and projects.
+        """List selected projects.
+
+        Huly has no separate product concept, so only ``project_ids`` is
+        honored; ``product_ids`` is accepted for interface compatibility.
 
         Args:
-            product_ids: Product IDs to retain, or an empty set for all products.
-            project_ids: Project IDs to retain, or an empty set for all projects.
+            product_ids: Unused, kept for signature compatibility.
+            project_ids: Project identifiers to retain, or empty for all.
 
         Returns:
-            Product and project scopes.
-
-        Raises:
-            RuntimeError: If pagination exceeds 100 pages.
+            Project scopes.
         """
-        scopes: list[Scope] = []
-        scopes.extend(
-            Scope(int(item["id"]), f"产品 · {item.get("name") or item["id"]}", "product")
-            for item in await self._list_resource("products", "products")
-            if not product_ids or int(item["id"]) in product_ids
-        )
-        scopes.extend(
-            Scope(
-                int(item["id"]),
-                f"项目 · {item.get('name') or item['id']}",
-                "project",
-            )
-            for item in await self._list_resource("projects", "projects")
-            if not project_ids or int(item["id"]) in project_ids
-        )
-        return scopes
-
-    async def list_projects(self) -> list[Scope]:
-        """List projects without loading unrelated product scopes.
-
-        Returns:
-            All projects visible to the configured ZenTao account.
-        """
+        items = await self._request("GET", "/projects")
+        projects = items.json()
         return [
-            Scope(int(item["id"]), f"项目 · {item.get('name') or item['id']}", "project")
-            for item in await self._list_resource("projects", "projects")
+            Scope(str(p["id"]), f"项目 · {p.get('name') or p['id']}", "project")
+            for p in projects
+            if not project_ids or str(p["id"]) in project_ids
         ]
 
-    async def list_users(self) -> dict[str, str]:
-        """Return a lookup from ZenTao account names to real names.
+    async def list_projects(self) -> list[Scope]:
+        """List all projects.
 
         Returns:
-            Account-to-real-name mapping for visible users.
+            All projects visible to the bridge's Huly account.
         """
-        users = await self._list_resource("users", "users")
-        return {str(item.get("account")): str(item.get("realname") or item.get("account")) for item in users if item.get("account")}
+        return await self.list_scopes(set(), set())
+
+    async def list_users(self) -> dict[str, str]:
+        """Return a lookup from Huly account identifiers to real names.
+
+        Returns:
+            Account-to-real-name mapping.
+        """
+        response = await self._request("GET", "/users")
+        return {str(k): str(v) for k, v in response.json().items()}
 
     async def list_bugs(self, scope: Scope) -> list[dict]:
-        """List all bugs in a product or project.
+        """List all bugs in a project, normalized to the report field shape.
 
         Args:
-            scope: Product or project whose bugs should be listed.
+            scope: Project whose bugs should be listed.
 
         Returns:
-            Raw bug dictionaries returned by ZenTao.
-
-        Raises:
-            RuntimeError: If pagination exceeds 100 pages.
+            Bug dictionaries with the normalized report field names.
         """
-        resource = "projects" if scope.kind == "project" else "products"
-        return await self._list_resource(
-            f"{resource}/{scope.id}/bugs", "bugs", {"status": "all"}
-        )
+        from urllib.parse import quote
+
+        response = await self._request("GET", f"/projects/{quote(str(scope.id), safe='')}/bugs")
+        return list(response.json())
 
     async def enrich_module_names(self, bugs: list[dict]) -> list[dict]:
-        """Fill missing module labels from representative bug detail responses.
-
-        ZenTao list responses often contain only a numeric module ID. One detail
-        request per distinct module is enough to recover its display name.
+        """Return bugs unchanged; the bridge already supplies module names.
 
         Args:
-            bugs: Bugs returned by a list endpoint.
+            bugs: Bugs returned by ``list_bugs``.
 
         Returns:
-            The same bug list with available ``moduleTitle`` values filled in.
+            The same bug list.
         """
-        representatives: dict[int, int] = {}
-        for bug in bugs:
-            module_id = self._number(bug.get("module"))
-            bug_id = self._number(bug.get("id"))
-            label = str(bug.get("moduleTitle") or bug.get("moduleName") or "").strip()
-            if module_id > 0 and bug_id > 0 and not label:
-                representatives.setdefault(module_id, bug_id)
-
-        names: dict[int, str] = {}
-        semaphore = asyncio.Semaphore(6)
-
-        async def load(module_id: int, bug_id: int) -> None:
-            async with semaphore:
-                try:
-                    response = await self._request("GET", f"bugs/{bug_id}")
-                    payload = response.json()
-                    data = payload.get("data", payload) if isinstance(payload, dict) else {}
-                    if isinstance(data, dict):
-                        name = str(data.get("moduleTitle") or data.get("moduleName") or "").strip()
-                        if name:
-                            names[module_id] = name
-                except (httpx.HTTPError, ValueError):
-                    return
-
-        await asyncio.gather(*(load(module_id, bug_id) for module_id, bug_id in representatives.items()))
-        for bug in bugs:
-            module_id = self._number(bug.get("module"))
-            if module_id in names and not str(bug.get("moduleTitle") or bug.get("moduleName") or "").strip():
-                bug["moduleTitle"] = names[module_id]
         return bugs
 
     def health(self) -> dict:
-        """Return the currently configured authentication mode.
+        """Return the configured authentication mode for the bridge.
 
         Returns:
-            A dictionary containing ``auth`` with ``token``, ``account``, or ``none``.
+            A dictionary containing ``auth`` with ``token`` or ``none``.
         """
-        if self._token:
-            auth = "token"
-        elif self.config.account and self.config.password:
-            auth = "account"
-        else:
-            auth = "none"
-        return {"auth": auth}
+        return {"auth": "token" if self.config.token else "none"}
 
     def auth_configured(self) -> bool:
-        """Return whether token or complete account credentials are configured.
+        """Return whether the bridge URL is configured.
 
         Returns:
-            ``True`` when authentication can be attempted.
+            ``True`` when a bridge URL is present.
         """
-        return bool(self._token or (self.config.account and self.config.password))
-
-    def _headers(self) -> dict[str, str]:
-        return {"Token": self._token} if self._token else {}
-
-    @staticmethod
-    def _number(value: object) -> int:
-        """Convert an API identifier to an integer safely.
-
-        Args:
-            value: Raw identifier from the API response.
-
-        Returns:
-            A positive integer or zero for invalid values.
-        """
-        try:
-            return int(value)
-        except (TypeError, ValueError):
-            return 0
+        return bool(self.config.base_url)
 
     async def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
         response = await self._client.request(method, path, **kwargs)
         response.raise_for_status()
         return response
-
-    async def _list_resource(
-        self,
-        path: str,
-        resource_name: str,
-        extra_params: dict[str, Any] | None = None,
-    ) -> list[dict]:
-        items: list[dict] = []
-        params = dict(extra_params or {})
-        limit = 100
-
-        for page in range(1, 101):
-            page_params = {**params, "page": page, "limit": limit}
-            response = await self._request("GET", path, params=page_params)
-            payload = response.json()
-            page_items, total = self._page_data(payload, resource_name)
-            items.extend(page_items)
-            if not page_items or len(items) >= total or len(page_items) < limit:
-                return items
-
-        raise RuntimeError("ZenTao 分页超过 100 页")
-
-    @staticmethod
-    def _page_data(payload: Any, resource_name: str) -> tuple[list[dict], int]:
-        data = payload.get("data", {}) if isinstance(payload, dict) else {}
-        if not isinstance(data, dict):
-            data = {}
-        source = payload if isinstance(payload, dict) else {}
-        page_items = source.get("items", source.get(resource_name, data.get("items", data.get(resource_name, []))))
-        total = source.get("total", data.get("total", 0))
-        if not total and isinstance(source.get("pager"), dict):
-            total = source["pager"].get("recTotal", 0)
-        return list(page_items or []), int(total or 0)

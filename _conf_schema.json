@@ -1,49 +1,31 @@
 {
-  "zentao_base_url": {
-    "description": "ZenTao 地址",
+  "huly_bridge_url": {
+    "description": "Huly Bridge 地址",
     "type": "string",
-    "default": "https://zentao.example.com",
-    "hint": "只填写实例根地址，不要包含 /api.php/v1"
+    "default": "http://127.0.0.1:8600",
+    "hint": "Node 边车地址，只填根地址，不带路径"
   },
-  "zentao_account": {
-    "description": "只读报表账号",
+  "huly_bridge_token": {
+    "description": "Huly Bridge 访问密钥",
     "type": "string",
     "default": "",
-    "hint": "建议使用单独的只读服务账号，不要使用个人账号"
-  },
-  "zentao_password": {
-    "description": "只读报表账号密码",
-    "type": "string",
-    "default": "",
-    "hint": "仅用于换取内存 Token，不写入报告或日志"
-  },
-  "zentao_token": {
-    "description": "可选 ZenTao API Token",
-    "type": "string",
-    "default": "",
-    "hint": "配置后优先使用 Token；否则使用账号密码换取 Token"
+    "hint": "与边车 BRIDGE_TOKEN 环境变量一致；边车未设置时留空"
   },
   "scope_project_ids": {
     "description": "项目范围 ID",
     "type": "string",
     "default": "",
-    "hint": "逗号分隔，例如 128；留空读取全部项目"
-  },
-  "scope_product_ids": {
-    "description": "产品范围 ID",
-    "type": "string",
-    "default": "",
-    "hint": "逗号分隔，例如 44；留空读取全部产品"
+    "hint": "逗号分隔的 Huly 项目编号；留空读取全部项目"
   },
   "report_title": {
     "description": "报告标题",
     "type": "string",
-    "default": "禅道每日缺陷日报"
+    "default": "Huly 每日缺陷日报"
   },
   "system_name": {
     "description": "系统名称",
     "type": "string",
-    "default": "禅道",
+    "default": "Huly",
     "hint": "显示在项目日报顶部，例如业务管理服务平台"
   },
   "project_avatar_urls": {

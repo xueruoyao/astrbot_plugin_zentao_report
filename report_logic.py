@@ -9,34 +9,28 @@ class Scope:
     """Describe a report scope.
 
     Args:
-        id: ZenTao scope identifier.
+        id: Project scope identifier (string, e.g. a Huly project identifier).
         name: Display name for the scope.
         kind: Scope category.
     """
 
-    def __init__(self, id: int, name: str, kind: str) -> None:
+    def __init__(self, id: str, name: str, kind: str) -> None:
         self.id = id
         self.name = name
         self.kind = kind
 
 
-def parse_ids(value: str) -> set[int]:
-    """Parse a comma-separated string of integer identifiers.
+def parse_ids(value: str) -> set[str]:
+    """Parse a comma-separated string of project identifiers.
 
     Args:
         value: Comma-separated identifier text.
 
     Returns:
-        A set containing all valid integer identifiers.
+        A set containing all non-empty trimmed identifiers.
     """
 
-    result: set[int] = set()
-    for item in value.split(","):
-        try:
-            result.add(int(item.strip()))
-        except (TypeError, ValueError):
-            continue
-    return result
+    return {item.strip() for item in value.split(",") if item.strip()}
 
 
 def _person_name(value: object) -> str:
@@ -51,7 +45,7 @@ def _person_name(value: object) -> str:
 
 def build_review_items(
     scopes: list[Scope],
-    bugs_by_scope: dict[int, list[dict]],
+    bugs_by_scope: dict[str, list[dict]],
     scope_filter: str = "",
     module_filter: str = "",
     limit: int = 20,
@@ -194,7 +188,7 @@ def _opened_today(value: object) -> bool:
 
 def build_report(
     scopes: list[Scope],
-    bugs_by_scope: dict[int, list[dict]],
+    bugs_by_scope: dict[str, list[dict]],
     title: str,
     generated_at: str,
     top_bug_limit: int = 5,
