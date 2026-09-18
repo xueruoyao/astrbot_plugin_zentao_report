@@ -1,0 +1,3 @@
+httpx
+playwright==1.49.1
+jinja2

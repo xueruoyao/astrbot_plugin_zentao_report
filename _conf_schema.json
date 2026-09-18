@@ -1,0 +1,140 @@
+{
+  "zentao_base_url": {
+    "description": "ZenTao 地址",
+    "type": "string",
+    "default": "https://zentao.example.com",
+    "hint": "只填写实例根地址，不要包含 /api.php/v1"
+  },
+  "zentao_account": {
+    "description": "只读报表账号",
+    "type": "string",
+    "default": "",
+    "hint": "建议使用单独的只读服务账号，不要使用个人账号"
+  },
+  "zentao_password": {
+    "description": "只读报表账号密码",
+    "type": "string",
+    "default": "",
+    "hint": "仅用于换取内存 Token，不写入报告或日志"
+  },
+  "zentao_token": {
+    "description": "可选 ZenTao API Token",
+    "type": "string",
+    "default": "",
+    "hint": "配置后优先使用 Token；否则使用账号密码换取 Token"
+  },
+  "scope_project_ids": {
+    "description": "项目范围 ID",
+    "type": "string",
+    "default": "",
+    "hint": "逗号分隔，例如 128；留空读取全部项目"
+  },
+  "scope_product_ids": {
+    "description": "产品范围 ID",
+    "type": "string",
+    "default": "",
+    "hint": "逗号分隔，例如 44；留空读取全部产品"
+  },
+  "report_title": {
+    "description": "报告标题",
+    "type": "string",
+    "default": "禅道每日缺陷日报"
+  },
+  "system_name": {
+    "description": "系统名称",
+    "type": "string",
+    "default": "禅道",
+    "hint": "显示在项目日报顶部，例如业务管理服务平台"
+  },
+  "project_avatar_urls": {
+    "description": "项目头像 URL 映射",
+    "type": "text",
+    "default": "{}",
+    "hint": "JSON 对象，键为项目名称，值为头像 URL。例如 {\"509\":\"https://example.com/509.png\"}；留空时显示项目缩写"
+  },
+  "top_bug_limit": {
+    "description": "底部缺陷展示数量",
+    "type": "int",
+    "default": 5,
+    "hint": "项目日报底部展示的优先关注缺陷数量，建议 3 至 8 条"
+  },
+  "ai_summary_enabled": {
+    "description": "启用 AI 今日点评",
+    "type": "bool",
+    "default": true,
+    "hint": "调用当前会话的聊天模型生成一句日报点评；不可用时自动使用规则点评"
+  },
+  "ai_summary_provider_id": {
+    "description": "AI 点评模型 ID",
+    "type": "string",
+    "default": "",
+    "hint": "留空时使用发起 /BR 命令的会话当前模型"
+  },
+  "ai_fallback_api_key": {
+    "description": "AI 备用 API Key",
+    "type": "string",
+    "default": "",
+    "hint": "AstrBot 模型提供商调用失败时使用；不会显示在日报或日志中"
+  },
+  "ai_fallback_base_url": {
+    "description": "AI 备用 API 地址",
+    "type": "string",
+    "default": "https://api.openai.com/v1",
+    "hint": "兼容 OpenAI Chat Completions 的服务地址，例如 https://api.deepseek.com/v1"
+  },
+  "ai_fallback_model": {
+    "description": "AI 备用模型名称",
+    "type": "string",
+    "default": "gpt-4o-mini",
+    "hint": "备用 Chat Completions 服务使用的模型名"
+  },
+  "report_style": {
+    "description": "日报渲染风格",
+    "type": "string",
+    "default": "graphite",
+    "options": ["graphite", "brutalism", "shadcn", "oneui", "skeuo"],
+    "hint": "五种风格：graphite工作台 / brutalism粗野主义 / shadcn暗色 / oneui三星风 / skeuo拟物化"
+  },
+  "push_enabled": {
+    "description": "企业微信推送开关",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后定时任务才会真正推送到群里；关闭时只生成不发送"
+  },
+  "daily_schedule_enabled": {
+    "description": "每日定时推送",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后按下方时间每天触发日报"
+  },
+  "daily_time": {
+    "description": "每日推送时间",
+    "type": "string",
+    "default": "18:30",
+    "hint": "格式 HH:MM，使用 Asia/Shanghai 时区"
+  },
+  "weekly_schedule_enabled": {
+    "description": "每周定时推送",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后按下方星期和时间每天触发周报"
+  },
+  "weekly_day": {
+    "description": "每周推送星期",
+    "type": "int",
+    "default": 5,
+    "hint": "0-6 表示周一至周日，默认 5 为周六"
+  },
+  "weekly_time": {
+    "description": "每周推送时间",
+    "type": "string",
+    "default": "18:00",
+    "hint": "格式 HH:MM"
+  },
+  "push_session": {
+    "description": "推送目标会话 UMO",
+    "type": "string",
+    "default": "",
+    "hint": "群里发送 /sid 获取，形如 wecom_ai_bot:GroupMessage:xxx；留空则只预览不送达"
+  }
+}

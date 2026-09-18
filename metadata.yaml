@@ -1,0 +1,10 @@
+name: zentao_report
+desc: 只读生成禅道每日缺陷日报图片，仅预览不推送。
+short_desc: 禅道每日缺陷日报插件（只读预览）
+help: 使用 /BR <项目ID或项目名称> 生成单项目日报图片；/bug_report preview 保留为配置范围预览，/bug_report status 查看配置。
+version: v0.1.0
+author: YANFD
+repo: "https://github.com/yanfd/astrbot_plugin_zentao_report"
+display_name: 禅道日报
+support_platforms:
+  - wecom_ai_bot
