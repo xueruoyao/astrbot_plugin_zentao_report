@@ -114,9 +114,21 @@
     "hint": "格式 HH:MM"
   },
   "push_session": {
-    "description": "推送目标会话 UMO",
+    "description": "推送目标会话 UMO（旧配置，单群）",
     "type": "string",
     "default": "",
-    "hint": "群里发送 /sid 获取，形如 wecom_ai_bot:GroupMessage:xxx；留空则只预览不送达"
+    "hint": "旧版单群目标；填了 push_sessions 后此项被忽略，留 push_sessions 空时可继续使用"
+  },
+  "push_sessions": {
+    "description": "推送目标会话列表（多群轮询）",
+    "type": "text",
+    "default": "",
+    "hint": "每行一个群会话 UMO，在对应群里发 /sid 获取，形如 wecom_ai_bot:GroupMessage:xxx；多个群将按顺序逐个推送"
+  },
+  "push_interval_seconds": {
+    "description": "多群推送间隔秒数",
+    "type": "float",
+    "default": 1.0,
+    "hint": "逐群推送之间的等待秒数，缓解 websocket 通道限流；0 表示不等待"
   }
 }

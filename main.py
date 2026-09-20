@@ -23,6 +23,7 @@ if __package__:
         build_review_items,
         build_rule_summary,
         parse_ids,
+        parse_push_targets,
     )
     from .report_renderer import render_report_png
 else:
@@ -33,6 +34,7 @@ else:
         build_review_items,
         build_rule_summary,
         parse_ids,
+        parse_push_targets,
     )
     from report_renderer import render_report_png
 
@@ -296,25 +298,70 @@ class ZenTaoReport(Star):
             return ""
         return str(avatars.get(project_name, "")).strip() if isinstance(avatars, dict) else ""
 
+    def _push_targets(self) -> list[str]:
+        """Resolve the ordered push target sessions from configuration.
+
+        Returns:
+            Unique push target UMOs; ``push_sessions`` wins, the legacy
+            single ``push_session`` is the fallback.
+        """
+        return parse_push_targets(
+            str(self.config.get("push_sessions", "") or ""),
+            str(self.config.get("push_session", "") or ""),
+        )
+
+    def _push_interval(self) -> float:
+        """Read the pause between consecutive group pushes, in seconds.
+
+        Returns:
+            A non-negative delay; defaults to 1 second for ws channels.
+        """
+        try:
+            return max(0.0, float(self.config.get("push_interval_seconds", 1) or 0))
+        except (TypeError, ValueError):
+            return 1.0
+
     async def _send_report(self, report: dict[str, Any], style: str) -> bool:
-        """Generate and push a report image to the configured session.
+        """Render once and push the report image to every target group in turn.
+
+        The image is generated a single time, then the same file is sent to
+        each configured session sequentially with a short pause between
+        sends, so one websocket channel is never flooded with images.
 
         Args:
             report: Aggregated report context.
             style: Style key for rendering.
 
         Returns:
-            True when a message was handed to the platform adapter.
+            True when at least one target accepted the message.
         """
-        session = str(self.config.get("push_session", "")).strip()
-        if not session:
-            raise RuntimeError("未配置推送目标会话，请先用 /sid 获取后填入 push_session")
+        targets = self._push_targets()
+        if not targets:
+            raise RuntimeError("未配置推送目标会话，请在 push_sessions 填入多个 /sid（换行或逗号分隔）")
         if not self.config.get("push_enabled"):
             raise RuntimeError("推送开关未开启")
 
         path = await self._to_thread_render(report, style)
-        chain = MessageChain().message(f"Huly 日报 {report['generated_at']}").file_image(path)
-        return await self.context.send_message(session, chain)
+        interval = self._push_interval()
+        delivered = 0
+        failures: list[str] = []
+        for index, session in enumerate(targets):
+            if index and interval:
+                await asyncio.sleep(interval)
+            try:
+                chain = MessageChain().message(f"Huly 日报 {report['generated_at']}").file_image(path)
+                if await self.context.send_message(session, chain):
+                    delivered += 1
+                else:
+                    failures.append(session)
+            except Exception as exc:  # noqa: BLE001
+                failures.append(session)
+                logger.warning("Push to session %s failed: %s", session, exc)
+        if delivered:
+            if failures:
+                logger.warning("Pushed to %d/%d sessions; failed: %s", delivered, len(targets), ", ".join(failures))
+            return True
+        raise RuntimeError(f"全部 {len(targets)} 个目标会话推送失败")
 
     @filter.command_group("bug_report")
     def bug_report(self) -> None:
@@ -325,23 +372,27 @@ class ZenTaoReport(Star):
         """检查 Huly Bridge 配置状态（不回显敏感信息）。"""
         client = self._client()
         push = "已开启" if self.config.get("push_enabled") else "关闭"
+        targets = self._push_targets()
         yield event.plain_result(
             f"Huly 日报健康检查\n"
             f"凭据：{self._auth_summary(client)}\n"
             f"Bridge 地址：{'已配置' if self.config.get('huly_bridge_url') else '未配置'}\n"
-            f"企业微信推送：{push}"
+            f"推送：{push}\n"
+            f"推送目标：{len(targets)} 个会话（轮询间隔 {self._push_interval():g} 秒）"
         )
 
     @bug_report.command("status")
     async def status(self, event: AstrMessageEvent) -> None:
         """查看插件配置与推送开关状态。"""
         project_ids = parse_ids(str(self.config.get("scope_project_ids", "")))
+        targets = self._push_targets()
         yield event.plain_result(
             f"Huly 日报状态\n"
             f"标题：{self.config.get('report_title', 'Huly 每日缺陷日报')}\n"
             f"项目范围：{sorted(project_ids) or '全部'}\n"
             f"风格：{self._style()}\n"
-            f"推送：{'开启' if self.config.get('push_enabled') else '关闭'}"
+            f"推送：{'开启' if self.config.get('push_enabled') else '关闭'}\n"
+            f"推送目标（{len(targets)} 个）：\n" + ("\n".join(f"  {i + 1}. {t}" for i, t in enumerate(targets)) or "  未配置")
         )
 
     @bug_report.command("styles")
@@ -379,9 +430,13 @@ class ZenTaoReport(Star):
             report = await self._build_project_report_context(project)
             report["daily_comment"] = await self._ai_daily_comment(event, report)
             path = await self._to_thread_render(report, self._style())
+            import astrbot.api.message_components as Comp
+
             event.stop_event()
-            yield event.plain_result(f"{report['project_name']}缺陷日报已生成")
-            yield event.image_result(path)
+            yield event.chain_result([
+                Comp.Plain(f"{report['project_name']}缺陷日报已生成"),
+                Comp.Image.fromFileSystem(path),
+            ])
         except Exception as exc:  # noqa: BLE001
             logger.exception("Project report preview failed")
             yield event.plain_result(f"项目日报生成失败：{exc}")
@@ -438,11 +493,11 @@ class ZenTaoReport(Star):
 
     @bug_report.command("send")
     async def send(self, event: AstrMessageEvent, style: str = "") -> None:
-        """立即生成并推送一份日报到群（需要推送开关和会话）。"""
+        """立即生成并推送一份日报到所有目标群（需要推送开关和会话列表）。"""
         try:
             _scopes, _bugs, report = await self._build_report_context()
             await self._send_report(report, self._style(style))
-            yield event.plain_result("日报已推送。")
+            yield event.plain_result(f"日报已推送到 {len(self._push_targets())} 个目标会话。")
         except Exception as exc:  # noqa: BLE001
             logger.exception("Send failed")
             yield event.plain_result(f"推送失败：{exc}")

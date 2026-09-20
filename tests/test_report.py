@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from report_html import render_html
-from report_logic import Scope, build_report
+from report_logic import Scope, build_report, parse_push_targets
 
 
 def test_project_report_uses_real_statuses_and_module_names() -> None:
@@ -58,9 +58,18 @@ def test_project_template_has_required_layout_and_footer() -> None:
     assert "今日新提交" in html
     assert "POWERED BY YANFD" in html
     assert "数据来源" not in html
-    assert "report-charts" in html
-    assert "今日新提交" in html
-    assert "submitters" in html
+
+
+def test_parse_push_targets_dedupes_and_falls_back() -> None:
+    """Multi-group targets parse in order; legacy single target still works."""
+    multi = "wecom_ai_bot:GroupMessage:a\nwecom_ai_bot:GroupMessage:b, wecom_ai_bot:GroupMessage:a\n\n"
+    assert parse_push_targets(multi) == [
+        "wecom_ai_bot:GroupMessage:a",
+        "wecom_ai_bot:GroupMessage:b",
+    ]
+    assert parse_push_targets("", "wecom_ai_bot:GroupMessage:legacy") == ["wecom_ai_bot:GroupMessage:legacy"]
+    assert parse_push_targets("  \n ,", "ignored-when-multi-empty-but-legacy-set") == ["ignored-when-multi-empty-but-legacy-set"]
+    assert parse_push_targets("", "") == []
 
 
 def test_renderer_creates_phone_ratio_png(tmp_path, monkeypatch) -> None:

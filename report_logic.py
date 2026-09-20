@@ -33,6 +33,46 @@ def parse_ids(value: str) -> set[str]:
     return {item.strip() for item in value.split(",") if item.strip()}
 
 
+def parse_push_targets(sessions: str, legacy_session: str = "") -> list[str]:
+    """Parse push target sessions into an ordered, de-duplicated list.
+
+    Newlines or commas separate targets. The legacy single ``push_session``
+    value is appended only when the multi-target list is empty, so existing
+    configurations keep working without migration.
+
+    Args:
+        sessions: Multi-target text from ``push_sessions``.
+        legacy_session: Single target from the older ``push_session`` key.
+
+    Returns:
+        Unique push target UMOs in configuration order.
+    """
+
+    targets = _split_targets(sessions)
+    if not targets:
+        return _split_targets(legacy_session)
+    return targets
+
+
+def _split_targets(raw: str) -> list[str]:
+    """Split raw target text into unique, order-preserved UMOs.
+
+    Args:
+        raw: Newline or comma separated session identifiers.
+
+    Returns:
+        Unique non-empty targets in first-seen order.
+    """
+    seen: set[str] = set()
+    targets: list[str] = []
+    for item in re.split(r"[\n,]+", raw):
+        target = item.strip()
+        if target and target not in seen:
+            seen.add(target)
+            targets.append(target)
+    return targets
+
+
 def _person_name(value: object) -> str:
     """Return a display name from a ZenTao person value."""
 
